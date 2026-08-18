@@ -1,14 +1,15 @@
 import { Hono } from 'hono';
 import type { EngineGateway } from '../engine/engineGateway';
 import { parseOrderPayload } from '../validation/order';
-import { formatPrice, formatQty } from '../../../shared-types/src';
+import { formatPrice, formatQty, PRICE_SCALE, QTY_SCALE } from '../../../shared-types/src';
 import { toClientOrder } from '../../../shared-types/src/serialize';
+import { releaseFunds, reserveFunds } from '../../../settlement/src/reservation';
 
 export function ordersRoute(engineGateway: EngineGateway) {
   const route = new Hono();
 
   route.post('/', async (c) => {
-    const userId = c.get('userId') as string;
+    const userId = c.get('userId') as number;
     const body = await c.req.json();
 
     // your turn:
@@ -21,6 +22,22 @@ export function ordersRoute(engineGateway: EngineGateway) {
     const order = parseOrderPayload(body,userId);
     if(!order)return c.json({error:"Parsing failed"},400);
     
+    const baseAsset = "BTC";
+    const quoteAsset = "USDT";
+
+    // reservation
+    const reserveAsset = order.side === "buy" ? quoteAsset : baseAsset;
+    const reserveAmount = order.side === "buy"
+    ? order.remainingQuantity * order.price / BigInt(QTY_SCALE) // quote amount, un-scaled correctly
+    : order.remainingQuantity;
+
+    try{
+        await reserveFunds(userId, reserveAsset, reserveAmount);
+    }catch(err){
+        return c.json({error:err instanceof Error ? err.message : "Reservation failed!"},400);
+    }
+
+
     // your turn: does Order need a userId/ownerId field added to attribute the order to this user?
     // if so, attach it here before calling engineGateway.submit(order)
     order.userId = userId;
@@ -54,8 +71,10 @@ export function ordersRoute(engineGateway: EngineGateway) {
   });
 
   route.delete('/:id', async (c) => {
-    const userId = c.get('userId') as string;
+    const userId = c.get('userId') as number;
     const orderId = c.req.param('id');
+    const baseAsset = "BTC";
+    const quoteAsset = "USDT";
 
     const order = engineGateway.getOrder(orderId); // you'll need a lookup method — does OrderBook have one, or only cancel()?
     if (!order || order.userId !== userId) {
@@ -68,8 +87,16 @@ export function ordersRoute(engineGateway: EngineGateway) {
         return c.json({ error: 'Order not found' }, 404);
     }
 
+    const releaseAsset = cancelled.side === "buy" ? quoteAsset : baseAsset;
+    const releaseAmount = cancelled.side === "buy"
+    ? cancelled.remainingQuantity * cancelled.price / BigInt(QTY_SCALE) // quote amount, un-scaled correctly
+    : cancelled.remainingQuantity;
+
+    await releaseFunds(userId, releaseAsset, releaseAmount);
+
     return c.json({
         success: true,
+        status:"cancelled",
         order: toClientOrder(cancelled!),
         // {
             // id: cancelled.id,

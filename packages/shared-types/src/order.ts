@@ -13,6 +13,7 @@ export interface Order {
     remainingQuantity: FixedQty;
     status: OrderStatus;
     createdAt: number;
+    userId: number;
 }
 
 export interface Trade {
@@ -22,6 +23,8 @@ export interface Trade {
     quantity: FixedQty;
     buyOrderId: string;
     sellOrderId: string;
+    buyUserId: number;
+    sellUserId: number;
     executedAt: number;
 }
 

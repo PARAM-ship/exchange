@@ -1,15 +1,25 @@
 import type { Side, Order, Trade } from "../../shared-types/src";
 
+export interface SubmitResult {
+    trades: Trade[];
+    restingOrder?: Order;
+    incomingOrderStatus: 'filled' | 'partiallyFilled' | 'resting' | 'cancelled';
+}
 
 export class OrderBook {
-    private bids: Order[] = []; // wants to buy
-    private asks: Order[] = []; // willing to pay/sell
+    public bids: Order[] = []; // wants to buy
+    public asks: Order[] = []; // willing to pay/sell
+    public nextOrderId = 0;
+    public lastAppliedSeq = 0;
 
     constructor(public readonly symbol: string){}
 
-    submit(incoming: Order): Trade[] {
+    submit(incoming: Order): SubmitResult {
         
+        this.nextOrderId += 1;
+
         const trades: Trade[] = [];
+        const originalQuantity = incoming.remainingQuantity;
 
         while(true){
             const resting = this.oppositeSide(incoming.side)[0];
@@ -30,6 +40,8 @@ export class OrderBook {
                 quantity:tradeQty,
                 buyOrderId: incoming.side === "buy" ? incoming.id : resting?.id,
                 sellOrderId:incoming.side === "sell" ? incoming.id : resting?.id,
+                buyUserId: incoming.side === "buy" ? incoming.userId : resting.userId,
+                sellUserId: incoming.side === "sell" ? incoming.userId : resting.userId,
                 executedAt: Date.now()
             }
             trades.push(trade);
@@ -37,9 +49,34 @@ export class OrderBook {
             if(resting.remainingQuantity === 0n)this.oppositeSide(incoming.side).splice(0,1);
             if(!incoming.remainingQuantity)break;
         }
-        if(incoming.remainingQuantity)this.insertSorted(incoming.side === "buy" ? this.bids : this.asks ,incoming,incoming.side)
-        return trades;
+        const result:SubmitResult = { trades };
+        if(incoming.remainingQuantity){
+            this.insertSorted(incoming.side === "buy" ? this.bids : this.asks ,incoming,incoming.side);
+            result.restingOrder = incoming;
+        }
+        
+        if (incoming.remainingQuantity === 0n) {
+            result.incomingOrderStatus = 'filled';
+        } else if (incoming.remainingQuantity < originalQuantity) {
+            result.incomingOrderStatus = 'partiallyFilled';
+        } else {
+            result.incomingOrderStatus = 'resting';
+        }
+        
+        return result;
     }
+
+    cancel(orderId: string): Order | null {
+    for (const side of [this.bids, this.asks]) {
+        const idx = side.findIndex(o => o.id === orderId);
+        if (idx !== -1) {
+            const [removed] = side.splice(idx, 1);
+            removed.status = 'cancelled';
+            return removed;
+        }
+    }
+    return null; // order not found (already filled/cancelled/never existed)
+}
 
     bestBid(): Order | undefined {
         return this.bids[0];
@@ -47,6 +84,14 @@ export class OrderBook {
 
     bestAsk(): Order | undefined {
         return this.asks[0];
+    }
+
+    serialize() {
+        return {
+            bids: this.bids,
+            asks: this.asks,
+            nextOrderId: this.nextOrderId
+        }
     }
 
     snapshot(){
@@ -59,6 +104,14 @@ export class OrderBook {
     private oppositeSide(side: Side): Order[] {
         return side === "buy" ? this.asks : this.bids;
     }
+
+    get(orderId: string): Order | null {
+    for (const side of [this.bids, this.asks]) {
+        const order = side.find(o => o.id === orderId);
+        if (order) return order;
+    }
+    return null;
+}
 
 
     private insertSorted(list: Order[],order: Order, side: Side) {
