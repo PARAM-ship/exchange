@@ -1,7 +1,7 @@
 import type { Order, Side } from "../../../shared-types/src";
 import {  parsePrice, parseQty } from "../../../shared-types/src"; // whatever your parse fns are actually named
 
-export function parseOrderPayload(body: unknown,userId:string): Order | null {
+export function parseOrderPayload(body: unknown,userId:number): Order | null {
   if (typeof body !== 'object' || body === null) return null;
 
   const { symbol, side, price, quantity } = body as Record<string, unknown>;

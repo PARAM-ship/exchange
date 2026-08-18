@@ -7,10 +7,17 @@ import { EngineGateway } from './engine/engineGateway';
 import { ordersRoute } from './routes/orders';
 import { serializeTrade, toClientTrade } from '../../shared-types/src/serialize';
 import { authMiddleware } from './auth/authMiddleware';
+import authRoutes from "./routes/auth";
+import { settleTrade } from '../../settlement/src/settlement';
+import { QTY_SCALE } from '../../shared-types/src';
 
 // --- crash recovery: snapshot + WAL replay ---
 const book = new OrderBook("BTC/USDT");
 const snapshotter = new Snapshotter(book);
+
+const baseAsset = "BTC";
+const quoteAsset = "USDT";
+
 
 const snap = snapshotter.load();
 if (snap) {
@@ -54,9 +61,9 @@ const app = new Hono();
 
 // route handler — reads c.get('userId'), never touches JWT/tokens directly
 
-app.route('/orders', ordersRoute(engineGateway));
-
 app.use('/orders/*', authMiddleware);
+app.route('/orders', ordersRoute(engineGateway));
+app.route("/auth", authRoutes);
 
 
 const server = Bun.serve({
@@ -92,8 +99,29 @@ const server = Bun.serve({
 });
 
 // wire engine events -> broadcast
-engineGateway.on('TradeExecuted', (trade) => {
-  server.publish(
+engineGateway.on('TradeExecuted', async (trade) => {
+  
+    // const buyOrder = engineGateway.getOrder(trade.buyOrderId);
+    // const sellOrder = engineGateway.getOrder(trade.sellOrderId);
+    // if (!buyOrder || !sellOrder) {
+    // // shouldn't happen — an executed trade implies both orders existed
+    // console.error("Trade executed but order lookup failed", trade.id);
+    // return;
+    // }
+    
+    try {
+        const quoteAmount = BigInt(trade.quantity * trade.price) / BigInt(QTY_SCALE);
+        await settleTrade(
+            trade.buyUserId, trade.sellUserId,
+            baseAsset, quoteAsset,
+            trade.quantity, quoteAmount/* quoteAmount computed same way as reserve/release */
+        );
+    } catch (err) {
+        // trade already matched in-memory but settlement failed — what should happen here?
+        console.error("Settlement failed for trade", trade.id, err);
+    }
+  
+    server.publish(
     `trades:${trade.symbol}`,
     JSON.stringify({ type: 'TradeExecuted', trade: toClientTrade(trade) })
   );

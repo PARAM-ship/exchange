@@ -1,7 +1,7 @@
 import { createMiddleware } from 'hono/factory';
 import { verify } from 'hono/jwt';
 
-const JWT_SECRET =  'dev-secret-change-me';
+export const JWT_SECRET =  'dev-secret-change-me';
 
 export const authMiddleware = createMiddleware(async (c, next) => {
   const authHeader = c.req.header('Authorization');
@@ -12,8 +12,8 @@ export const authMiddleware = createMiddleware(async (c, next) => {
   const token = authHeader.slice('Bearer '.length);
 
   try {
-    const payload = await verify(token, JWT_SECRET);
-    if (typeof payload.userId !== 'string') {
+    const payload = await verify(token, JWT_SECRET, 'HS256');
+    if (typeof payload.userId !== 'number') {
       return c.json({ error: 'Invalid token payload' }, 401);
     }
     c.set('userId', payload.userId);
